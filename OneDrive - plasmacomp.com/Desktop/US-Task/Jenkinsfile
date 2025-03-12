@@ -1,0 +1,20 @@
+pipeline {
+    agent any 
+    
+    environment {
+        dockerHubUser = 'rohannegi11'
+        imageName = 'dotnetproject:latest'
+    }
+
+    stages {
+
+        stage("Scan Docker Image with Trivy") {
+            steps {
+                script {
+                    sh "docker pull ${dockerHubUser}/${imageName}"
+                    sh "trivy image ${dockerHubUser}/${imageName}"
+                }
+            }
+        }
+    }
+}
