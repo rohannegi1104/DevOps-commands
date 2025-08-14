@@ -1,0 +1,226 @@
+DevOps Kubernetes (K8s) Cheat Sheet
+Last Updated: 13:18 05-08-2025
+Maintained by: DevOps Team
+
+____________________________________________________________________________________________
+____________________________________________________________________________________________
+
+
+Basic Cluster Commands
+------------------------
+
+View cluster info	                       :- kubectl cluster-info
+Get list of nodes	                       :- kubectl get nodes
+Get nodes with details (IP, roles, OS, etc.)   :- kubectl get nodes -o wide
+Get nodes with labels	                       :- kubectl get nodes -o wide --show-labels
+Continuously watch node status	watch          :- kubectl get nodes -o wide
+View node components in detail	               :- kubectl describe nodes
+Pods in kube-system namespace (with node & IP) :- kubectl get pods -n kube-system -o wide
+
+___________________________________________________________________________________________
+___________________________________________________________________________________________
+
+Context Management
+-------------------
+
+
+View current context                    	kubectl config current-context
+List available contexts                 	kubectl config get-contexts
+Switch to another context	                kubectl config use-context <context-name>
+
+_____________________________________________________________________________________________
+_____________________________________________________________________________________________
+
+
+YAML Resource Management
+------------------------
+
+Dry run YAML (validate)	                     kubectl apply -f <file>.yaml --dry-run=client -o yaml
+Show diff between file and cluster	     kubectl diff -f <file>.yaml
+Export deployment YAML	                     kubectl get deploy <name> -o yaml > deploy.yaml
+Delete resource from file	             kubectl delete -f <file>.yaml
+Get live YAML of any resource	             kubectl get <resource> <name> -o yaml
+
+______________________________________________________________________________________________
+______________________________________________________________________________________________
+
+KUBECONFIG: Temporary Access
+------------------------------
+
+Set temporary kubeconfig path                 export KUBECONFIG=/path/to/config
+
+Revert to default kubeconfig                  unset KUBECONFIG
+
+Check active kubeconfig                       echo $KUBECONFIG (blank = default)
+
+Merge multiple kubeconfigs                    export KUBECONFIG=~/.kube/config:/other/config
+
+Merges and flattens all kubeconfigs from KUBECONFIG into a single file (merged-config).        
+
+                                           :- kubectl config view --merge --flatten > ~/.kube/merged-config
+
+Activates the newly merged config file for use by kubectl   :-    export KUBECONFIG=~/.kube/merged-config
+
+
+_________________________________________________________________________________________________
+_________________________________________________________________________________________________
+
+Pod-Related Tasks (Memory Info of All Pods)
+---------------------------------------------
+
+kubectl -n application get pod -o=jsonpath='{range .items[*]}{.metadata.name}{"\n  Requests: "}{.spec.containers[*].resources.requests.memory}{"\n  Limits: "}{.spec.containers[*].resources.limits.memory}{"\n\n"}{end}'
+
+
+Delete Pods by App Name
+----------------------
+
+kubectl -n application delete pod -l app.kubernetes.io/name=c2m-api
+
+
+Delete Pods by Prefix
+-----------------------
+
+kubectl -n application get po | grep '^heatstreaming' | awk '{print $1}' | xargs kubectl -n application delete pod
+
+
+Delete Pods by Status
+------------------------
+
+for status in CrashLoopBackOff Pending Error Terminating ContainerCreating; do
+kubectl -n application get po | awk -v s="$status" '$3 == s {print $1}' | xargs -r kubectl -n application delete pod
+done
+
+
+Get Pod-Node Mapping
+----------------------
+
+kubectl get pods -o=custom-columns='POD:metadata.name,NODE:spec.nodeName,OWNER:metadata.ownerReferences[0].name' -A
+
+
+Access a Pod’s Shell
+----------------------
+
+kubectl exec -it <pod-name> -n applicaton -c <container-name> -- /bin/bash
+
+
+Dynamic Pod Exec
+-----------------
+
+kubectl exec -it $(kubectl get pod -n application -l app=<appname> -o jsonpath="{.items[0].metadata.name}") -n <namespace> -c <container-name> -- /bin/bash
+
+
+
+Logs
+----
+
+kubectl logs <pod-name> -n application
+kubectl logs -f <pod-name> -n application  # stream
+kubectl logs --tail=100 <pod-name> -n application
+kubectl logs --previous <pod-name> -n application
+
+
+Copy Files
+--------------
+
+kubectl cp ./local-file.txt <namespace>/<pod-name>:/target/path -c <container-name>
+kubectl cp <namespace>/<pod-name>:/remote/path ./local-dir/ -c <container-name>
+
+_________________________________________________________________________________________________
+_________________________________________________________________________________________________
+
+Image Tasks (List All Deployment Images)
+------------------------------------------
+
+kubectl -n application get deployment -o=jsonpath="{range .items[*]}{.metadata.name}{':\t'}{.spec.template.spec.containers[*].image}{'\n'}{end}"
+
+
+ConfigMap & Secret Tasks (Create ConfigMap from .env file)
+------------------------------------------------------------
+
+kubectl create configmap my-config --from-env-file=env-file.env
+
+
+Export ConfigMap Data as Key=Value
+-------------------------------------
+
+kubectl get configmap <name> -n <namespace> -o json | jq -r '.data | to_entries[] | "\(.key)=\(.value)"'
+
+
+Restart all application/Pods Using a Particular ConfigMap
+-------------------------------------------
+
+CONFIGMAP_NAME="c2m-core"
+kubectl get pods -A -o json | jq -r --arg cm "$CONFIGMAP_NAME" '
+  .items[] | select(
+    .spec.volumes[]?.configMap?.name == $cm or
+    .spec.containers[].envFrom[]?.configMapRef?.name == $cm or
+    .spec.containers[].env[]?.valueFrom?.configMapKeyRef?.name == $cm
+  ) | "\(.metadata.namespace) \(.metadata.name)"
+' | sort -u | while read -r namespace pod; do
+  echo "Restarting pod $pod in namespace $namespace"
+  kubectl delete pod "$pod" -n "$namespace"
+done
+
+
+
+One-liner to Extract Deployment name and ConfigMap Names together
+------------------------------------------------------
+
+
+kubectl -n application get deployments -o json | jq -r '
+  .items[] | {
+    deployment: .metadata.name,
+    configMaps: (
+      (.spec.template.spec.volumes[]? | select(.configMap) | .configMap.name),
+      (.spec.template.spec.containers[]?.envFrom[]? | select(.configMapRef) | .configMapRef.name),
+      (.spec.template.spec.containers[]?.env[]? | select(.valueFrom.configMapKeyRef) | .valueFrom.configMapKeyRef.name)
+    ) | select(. != null)
+  } | [.deployment, .configMaps] | @tsv'
+
+
+_________________________________________________________________________________________________
+_________________________________________________________________________________________________
+
+Deployment Tasks(Update Deployment Images)
+
+kubectl -n application set image deployment/c2m-api c2m-api=image-name:tag
+
+
+Rollout Restart for Multiple Deployments
+--------------------------------------------
+
+for deploy in c2m-console c2m-api c2m-dashboard; do
+  kubectl -n application rollout restart deployment/$deploy
+done
+
+
+Scale Deployments
+----------------------
+
+kubectl -n application scale deployment --all --replicas=0
+kubectl -n application scale deployment --all --replicas=1
+
+__________________________________________________________________________________________________
+__________________________________________________________________________________________________
+
+Helm Commands
+----------------
+
+helm install redis bitnami/redis \
+  --namespace redis \
+  --set auth.enabled=false \
+  --set master.persistence.enabled=true \
+  --set master.persistence.storageClass=nfs-client \
+  --set master.persistence.size=100Gi \
+  --set replica.persistence.enabled=true \
+  --set replica.persistence.storageClass=nfs-client \
+  --set replica.persistence.size=100Gi \
+  --set replica.replicaCount=1
+
+
+Uninstall Helm Chart
+---------------------
+
+helm uninstall redis -n redis
+
+
